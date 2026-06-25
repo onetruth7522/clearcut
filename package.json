@@ -1,0 +1,26 @@
+{
+  "name": "clearcut",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-backend, fully client-side in-browser AI background remover. Full-res, no watermark, photos never leave your device.",
+  "license": "MIT",
+  "scripts": {
+    "copy-ort": "node scripts/copy-ort.mjs",
+    "predev": "node scripts/copy-ort.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/copy-ort.mjs",
+    "build": "tsc --noEmit && vite build",
+    "postbuild": "node scripts/prune-dist-wasm.mjs",
+    "preview": "vite preview",
+    "test": "node --test --import tsx \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vite": "^8.0.0"
+  }
+}

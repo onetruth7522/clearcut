@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+
+# Regenerable ONNX Runtime wasm — recreated by `npm run copy-ort` (scripts/copy-ort.mjs).
+public/ort/
+
+# Build/process notes — Syncthing-carried scaffolding, not part of the shipped repo.
+MEASUREMENTS.md

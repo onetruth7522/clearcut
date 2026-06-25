@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%234ea1ff'/%3E%3Ctext x='50' y='72' font-size='64' text-anchor='middle' fill='%2308111e'%3E%E2%9C%82%3C/text%3E%3C/svg%3E"
+    />
+    <title>ClearCut — private, full-res background remover</title>
+    <meta
+      name="description"
+      content="Remove image backgrounds in your browser. Full resolution, no watermark, no upload — your photos never leave your device."
+    />
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #181b22;
+        --ink: #e8eaed;
+        --muted: #9aa0aa;
+        --accent: #4ea1ff;
+        --edge: #2a2f3a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      header { padding: 2rem 1rem 0.5rem; text-align: center; }
+      header h1 { margin: 0; font-size: 1.8rem; letter-spacing: -0.02em; }
+      header p { margin: 0.4rem 0 0; color: var(--muted); }
+      .privacy { color: var(--accent); font-weight: 600; }
+      main { flex: 1; width: 100%; max-width: 880px; margin: 0 auto; padding: 1.5rem 1rem; }
+      #dropzone {
+        border: 2px dashed var(--edge);
+        border-radius: 14px;
+        background: var(--panel);
+        padding: 3rem 1rem;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      #dropzone:hover, #dropzone.active { border-color: var(--accent); background: #1d212a; }
+      #dropzone strong { display: block; font-size: 1.1rem; }
+      #dropzone span { color: var(--muted); font-size: 0.9rem; }
+      #status {
+        text-align: center;
+        margin: 1rem 0;
+        min-height: 1.5em;
+        color: var(--muted);
+      }
+      #status[data-state="error"] { color: #ff7b72; }
+      #status[data-state="done"] { color: #56d364; }
+      #preview { text-align: center; }
+      #canvas { max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+      .actions { text-align: center; margin-top: 1rem; }
+      button#download {
+        background: var(--accent);
+        color: #08111e;
+        border: 0;
+        border-radius: 10px;
+        padding: 0.7rem 1.4rem;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button#download:disabled { opacity: 0.4; cursor: not-allowed; }
+      footer {
+        border-top: 1px solid var(--edge);
+        padding: 1.25rem 1rem;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      footer a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ClearCut</h1>
+      <p>Remove an image background in full resolution — no watermark, no sign-up.</p>
+      <p class="privacy">Your photos never leave your device.</p>
+    </header>
+
+    <main>
+      <div id="dropzone" role="button" tabindex="0" aria-label="Choose or drop an image">
+        <strong>Drop an image here</strong>
+        <span>or click to choose — PNG, JPEG, or WebP</span>
+        <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+      </div>
+
+      <p id="status" data-state="idle"></p>
+
+      <div id="preview" hidden>
+        <canvas id="canvas"></canvas>
+        <div class="actions">
+          <button id="download" disabled>Download PNG</button>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <p>
+        Runs entirely in your browser. Background removal by the
+        <a href="https://github.com/xuebinqin/U-2-Net" target="_blank" rel="noopener">U²-Net</a>
+        model (Apache-2.0) via
+        <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">🤗 Transformers.js</a>.
+        See <a href="./THIRD-PARTY-NOTICES.md" target="_blank" rel="noopener">third-party notices</a>.
+      </p>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
