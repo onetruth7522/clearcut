@@ -6,5 +6,6 @@ dist/
 # Regenerable ONNX Runtime wasm — recreated by `npm run copy-ort` (scripts/copy-ort.mjs).
 public/ort/
 
-# Build/process notes — Syncthing-carried scaffolding, not part of the shipped repo.
+# Build/process notes & deferral ledger — local project scaffolding, not part of the shipped repo.
 MEASUREMENTS.md
+CARRY-FORWARD.md
