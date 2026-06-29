@@ -75,7 +75,17 @@ worker.onmessage = (e: MessageEvent<WorkerMsg>) => {
     pump(); // keep the batch moving past a failed image
   }
 };
-worker.onerror = (e) => showError(refs, e.message || "worker crashed");
+// An uncaught worker crash (e.g. ORT fatal) must not wedge the queue: reset the single-session
+// guard, fail the in-flight job, and pump on — otherwise inFlight stays true and intake() silently
+// ignores every future drop until reload (Debugger M1; stakes raised by the batch queue).
+worker.onerror = (e) => {
+  inFlight = false;
+  const msg = e.message || "worker crashed";
+  const stuck = jobs.find((j) => j.status === "processing");
+  if (stuck) { stuck.status = "error"; stuck.detail = msg; }
+  if (isPro) { renderQueue(); updateOverallStatus(); } else { showError(refs, msg); }
+  pump();
+};
 
 // Composite + encode a finished mask. The worker is freed (pump) BEFORE we encode, so the next
 // image segments on the worker thread while this one's PNG encodes on the main thread.
@@ -208,11 +218,22 @@ function updateOverallStatus(): void {
   }
 }
 
-// Finished images with an encoded PNG, in queue order — the bulk-ZIP payload.
+// Finished images with an encoded PNG, in queue order — the bulk-ZIP payload. De-duplicate output
+// names so two same-named sources (e.g. batched from different folders) don't overwrite each other
+// inside the ZIP (Debugger L3): the Nth collision becomes "<stem> (N)-clearcut.png".
 function readyResults(): { name: string; blob: Blob }[] {
-  return jobs.flatMap((j) =>
-    j.status === "done" && j.blob && j.outName ? [{ name: j.outName, blob: j.blob }] : [],
-  );
+  const seen = new Map<string, number>();
+  return jobs.flatMap((j) => {
+    if (!(j.status === "done" && j.blob && j.outName)) return [];
+    const n = seen.get(j.outName) ?? 0;
+    seen.set(j.outName, n + 1);
+    let name = j.outName;
+    if (n > 0) {
+      const dot = name.lastIndexOf(".");
+      name = dot === -1 ? `${name} (${n})` : `${name.slice(0, dot)} (${n})${name.slice(dot)}`;
+    }
+    return [{ name, blob: j.blob }];
+  });
 }
 
 function syncDownloadAll(): void {
