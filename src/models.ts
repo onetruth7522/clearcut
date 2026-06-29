@@ -64,10 +64,12 @@ export const MODELS: Record<QualityKey, ModelDescriptor> = {
     mean: [128, 128, 128],
     std: [256, 256, 256],
     output: "saliency",
-    // Mirror we control (CF-0016): verbatim Apache-2.0 IS-Net general-use, SHA-256
-    // 4c56bbc21588459dda11efba5a4a8ee163969da109ae170fb1988c1c2ea4a90a, attribution in the repo card.
-    // Was x-Liola-x/isnet-general-use-onnx (third-party); a paid path shouldn't lean on a stranger's repo.
-    url: "https://huggingface.co/SacredNoir/isnet-general-use-onnx/resolve/main/isnet-general-use.onnx",
+    // Mirror we control (CF-0016): IS-Net general-use, Apache-2.0, attribution in the repo card.
+    // Served as uint8 dynamic-quantized q8 (CF-0017): ~44 MB vs 176 MB fp32 (4x smaller), ~1.8x faster
+    // on the WASM CPU EP, mask quality near-identical (IoU ~0.94 on a fine-edge test, fine detail kept).
+    // fp16 was evaluated and rejected — ORT-Web WASM has no fp16 compute kernels (2x only, equal/slower);
+    // q8 dominates on our WASM-only Pro path. SHA-256 feed6f32a5e707ca7e939576b2d891b23fb9eb4114749657a5efc64e8651e43a.
+    url: "https://huggingface.co/SacredNoir/isnet-general-use-onnx/resolve/main/isnet-general-use-q8.onnx",
     ep: "wasm",
     inputName: "input",
     outputName: "output",
