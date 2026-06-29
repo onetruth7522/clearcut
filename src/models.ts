@@ -64,7 +64,10 @@ export const MODELS: Record<QualityKey, ModelDescriptor> = {
     mean: [128, 128, 128],
     std: [256, 256, 256],
     output: "saliency",
-    url: "https://huggingface.co/x-Liola-x/isnet-general-use-onnx/resolve/main/isnet-general-use.onnx",
+    // Mirror we control (CF-0016): verbatim Apache-2.0 IS-Net general-use, SHA-256
+    // 4c56bbc21588459dda11efba5a4a8ee163969da109ae170fb1988c1c2ea4a90a, attribution in the repo card.
+    // Was x-Liola-x/isnet-general-use-onnx (third-party); a paid path shouldn't lean on a stranger's repo.
+    url: "https://huggingface.co/SacredNoir/isnet-general-use-onnx/resolve/main/isnet-general-use.onnx",
     ep: "wasm",
     inputName: "input",
     outputName: "output",
