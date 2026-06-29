@@ -16,6 +16,7 @@ export interface UIRefs {
   activateBtn: HTMLButtonElement;
   unlockMsg: HTMLElement;
   proBadge: HTMLElement;
+  batchList: HTMLElement;
 }
 
 export function getRefs(): UIRefs {
@@ -37,7 +38,42 @@ export function getRefs(): UIRefs {
     activateBtn: $<HTMLButtonElement>("activate"),
     unlockMsg: $("unlock-msg"),
     proBadge: $("pro-badge"),
+    batchList: $("batch"),
   };
+}
+
+export type BatchStatus = "queued" | "processing" | "done" | "error";
+export interface BatchItemView {
+  name: string;
+  status: BatchStatus;
+  detail?: string;
+}
+
+/** Render the Pro batch queue as a per-image status list. An empty list hides the container. */
+export function renderBatch(refs: UIRefs, items: BatchItemView[]): void {
+  const list = refs.batchList;
+  if (items.length === 0) {
+    list.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  const glyph: Record<BatchStatus, string> = { queued: "•", processing: "…", done: "✓", error: "✗" };
+  list.hidden = false;
+  list.replaceChildren(
+    ...items.map((it) => {
+      const row = document.createElement("div");
+      row.className = "batch-item";
+      row.dataset.status = it.status;
+      const name = document.createElement("span");
+      name.className = "bi-name";
+      name.textContent = it.name;
+      const state = document.createElement("span");
+      state.className = "bi-state";
+      state.textContent = it.detail ? `${glyph[it.status]} ${it.detail}` : glyph[it.status];
+      row.append(name, state);
+      return row;
+    }),
+  );
 }
 
 /** Reflect pro entitlement into the UI: show the PRO badge, retire the unlock entry, allow multi-file intake. */

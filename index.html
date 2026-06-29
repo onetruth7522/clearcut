@@ -106,6 +106,21 @@
       #unlock-msg { font-size: 0.8rem; min-height: 1em; }
       #unlock-msg[data-state="error"] { color: #ff7b72; }
       #unlock-msg[data-state="ok"] { color: #56d364; }
+      #batch {
+        margin: 0 auto 1rem; max-width: 560px;
+        border: 1px solid var(--edge); border-radius: 12px; background: var(--panel);
+        overflow: hidden;
+      }
+      .batch-item {
+        display: flex; justify-content: space-between; gap: 1rem; align-items: center;
+        padding: 0.5rem 0.85rem; border-top: 1px solid var(--edge); font-size: 0.85rem;
+      }
+      .batch-item:first-child { border-top: 0; }
+      .bi-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .bi-state { color: var(--muted); flex: none; }
+      .batch-item[data-status="processing"] .bi-state { color: var(--accent); }
+      .batch-item[data-status="done"] .bi-state { color: #56d364; }
+      .batch-item[data-status="error"] .bi-state { color: #ff7b72; }
     </style>
   </head>
   <body>
@@ -123,6 +138,8 @@
       </div>
 
       <p id="status" data-state="idle"></p>
+
+      <div id="batch" hidden></div>
 
       <div id="preview" hidden>
         <canvas id="canvas"></canvas>

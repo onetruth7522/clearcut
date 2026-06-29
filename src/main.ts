@@ -3,7 +3,7 @@
 // 320x320 mask, which we upscale and composite at full resolution here.
 import { compositeAlpha, type RGBAImage } from "./composite.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
-import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, type UIRefs } from "./ui.ts";
+import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, type UIRefs } from "./ui.ts";
 import { verifyProToken, verifyStoredEntitlement, loadPro, savePro } from "./license.ts";
 
 const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -32,8 +32,22 @@ let reqId = 0;
 const pending = new Map<number, { original: RGBAImage; sourceName: string }>();
 let activeBackend = "";
 let lastResult: RGBAImage | null = null;
-let processing = false; // Phase 1 handles one image at a time; ignore drops while one is in flight.
 let isPro = false; // Pro entitlement (verified offline); unlocks batch + bulk-ZIP. See license.ts.
+
+// Batch queue. Free = a 1-item queue; Pro = N items processed STRICTLY sequentially through the
+// single ORT worker session — never two concurrent segmentations (ARCHITECTURE.md §6 invariant).
+type JobStatus = "queued" | "processing" | "done" | "error";
+interface Job {
+  id: number;
+  file: File;
+  name: string;        // source filename
+  status: JobStatus;
+  detail?: string;     // error message, when status === "error"
+  outName?: string;    // "<stem>-clearcut.png"
+  blob?: Blob;         // encoded transparent PNG, retained for bulk-ZIP
+}
+let jobs: Job[] = [];
+let inFlight = false;  // a segmentation is currently in the worker (the single-session guard)
 
 // Guard against megapixel inputs that blow past canvas / typed-array limits (silent blank output).
 const MAX_PIXELS = 25_000_000; // ~25 MP
@@ -50,78 +64,152 @@ worker.onmessage = (e: MessageEvent<WorkerMsg>) => {
       setStatus(refs, "loading-model");
     }
   } else if (msg.type === "result") {
-    processing = false;
-    const job = pending.get(msg.id);
-    pending.delete(msg.id);
-    if (!job) return;
-    try {
-      const composited = compositeAlpha(job.original, { data: msg.mask, width: msg.maskW, height: msg.maskH });
-      lastResult = composited;
-      renderPreview(refs.canvas, composited);
-      refs.preview.hidden = false;
-      refs.downloadBtn.disabled = false;
-      refs.downloadBtn.dataset.name = job.sourceName.replace(/\.[^.]+$/, "") + "-clearcut.png";
-      setStatus(refs, "done", activeBackend ? `via ${activeBackend}` : "");
-    } catch (err) {
-      showError(refs, err instanceof Error ? err.message : String(err));
-    }
+    void onResult(msg);
   } else if (msg.type === "error") {
-    processing = false;
+    inFlight = false;
+    const job = msg.id !== undefined ? jobs.find((j) => j.id === msg.id) : undefined;
     if (msg.id !== undefined) pending.delete(msg.id); // don't leak the held full-res RGBA
-    showError(refs, msg.message);
+    if (job) { job.status = "error"; job.detail = msg.message; }
+    if (isPro) { renderQueue(); updateOverallStatus(); } else { showError(refs, msg.message); }
+    pump(); // keep the batch moving past a failed image
   }
 };
 worker.onerror = (e) => showError(refs, e.message || "worker crashed");
 
-async function handleFile(file: File): Promise<void> {
-  if (processing) return; // one image at a time (Phase 1); ORT can't run concurrent sessions
-  if (!ACCEPTED.has(file.type)) {
-    showError(refs, `unsupported file type "${file.type || "unknown"}" — use PNG, JPEG, or WebP`);
+// Composite + encode a finished mask. The worker is freed (pump) BEFORE we encode, so the next
+// image segments on the worker thread while this one's PNG encodes on the main thread.
+async function onResult(msg: WorkerResult): Promise<void> {
+  inFlight = false;
+  const job = jobs.find((j) => j.id === msg.id);
+  const meta = pending.get(msg.id);
+  pending.delete(msg.id);
+  pump();
+  if (!job || !meta) return;
+  try {
+    const composited = compositeAlpha(meta.original, { data: msg.mask, width: msg.maskW, height: msg.maskH });
+    lastResult = composited;
+    renderPreview(refs.canvas, composited);
+    refs.preview.hidden = false;
+    job.outName = stem(job.name) + "-clearcut.png";
+    refs.downloadBtn.dataset.name = job.outName;
+    refs.downloadBtn.disabled = false;
+    job.blob = await toPngBlob(composited); // retain for bulk-ZIP (hold the PNG, not the RGBA)
+    job.status = "done";
+    if (!isPro) setStatus(refs, "done", activeBackend ? `via ${activeBackend}` : "");
+  } catch (err) {
+    job.status = "error";
+    job.detail = err instanceof Error ? err.message : String(err);
+    if (!isPro) showError(refs, job.detail);
+  }
+  if (isPro) { renderQueue(); updateOverallStatus(); }
+}
+
+const stem = (filename: string): string => filename.replace(/\.[^.]+$/, "");
+
+// Decode a file to FULL-RESOLUTION RGBA on this thread; these pixels are kept for the composite.
+// Honor EXIF orientation (phone JPEGs) — must match the worker's decode so the mask aligns.
+async function decodeFullRes(file: File): Promise<RGBAImage> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  if (bitmap.width * bitmap.height > MAX_PIXELS) {
+    bitmap.close();
+    throw new Error(`image too large (${(bitmap.width * bitmap.height / 1e6).toFixed(0)} MP) — max 25 MP`);
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) { bitmap.close(); throw new Error("2D context unavailable"); }
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return {
+    data: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
+function queueBusy(): boolean {
+  return inFlight || jobs.some((j) => j.status === "queued");
+}
+
+// Accept dropped/picked files into a FRESH queue and start the pump. Free intake is capped to the
+// first accepted file; Pro enqueues every accepted image.
+function intake(files: File[]): void {
+  if (queueBusy()) return; // a batch is already running — ignore new drops (single ORT session)
+  const accepted = files.filter((f) => ACCEPTED.has(f.type));
+  if (accepted.length === 0) {
+    showError(refs, "unsupported file type — use PNG, JPEG, or WebP");
     return;
   }
-  processing = true;
+  const batch = isPro ? accepted : accepted.slice(0, 1);
+  jobs = batch.map((file) => ({ id: ++reqId, file, name: file.name, status: "queued" }));
+  refs.downloadBtn.disabled = true;
+  refs.preview.hidden = true;
+  setStatus(refs, "loading-model");
+  renderQueue();
+  pump();
+}
+
+// Dispatch the next queued job into the worker. The inFlight guard ensures only ONE segmentation
+// is ever outstanding — we never postMessage a second segment until the first's result arrives.
+function pump(): void {
+  if (inFlight) return;
+  const next = jobs.find((j) => j.status === "queued");
+  if (!next) return; // queue drained
+  inFlight = true;
+  next.status = "processing";
+  renderQueue();
+  void dispatch(next);
+}
+
+async function dispatch(job: Job): Promise<void> {
   try {
-    setStatus(refs, "loading-model");
-    refs.downloadBtn.disabled = true;
-    refs.preview.hidden = true;
-
-    // Decode to FULL-RESOLUTION RGBA on this thread; these pixels are kept for the composite.
-    // Honor EXIF orientation (phone JPEGs) — must match the worker's decode so the mask aligns.
-    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-    if (bitmap.width * bitmap.height > MAX_PIXELS) {
-      bitmap.close();
-      processing = false;
-      showError(refs, `image too large (${(bitmap.width * bitmap.height / 1e6).toFixed(0)} MP) — max 25 MP`);
-      return;
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) throw new Error("2D context unavailable");
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const original: RGBAImage = {
-      data: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
-      width: canvas.width,
-      height: canvas.height,
-    };
-
-    const id = ++reqId;
-    pending.set(id, { original, sourceName: file.name });
-    setStatus(refs, "segmenting");
+    const original = await decodeFullRes(job.file);
+    pending.set(job.id, { original, sourceName: job.name });
+    if (isPro) updateOverallStatus(); else setStatus(refs, "segmenting");
     // Hand the worker the original blob (cheap to clone); it does its own 320x320 downscale.
-    worker.postMessage({ type: "segment", id, blob: file });
+    worker.postMessage({ type: "segment", id: job.id, blob: job.file });
   } catch (err) {
-    processing = false;
-    showError(refs, err instanceof Error ? err.message : String(err));
+    // Decode failed (e.g. too large / corrupt) — fail just this job and keep the batch moving.
+    job.status = "error";
+    job.detail = err instanceof Error ? err.message : String(err);
+    inFlight = false;
+    if (!isPro) showError(refs, job.detail);
+    renderQueue();
+    updateOverallStatus();
+    pump();
+  }
+}
+
+function renderQueue(): void {
+  // Free single-image flow keeps the classic status line and shows no list; the list is Pro-only.
+  renderBatch(refs, isPro ? jobs.map((j) => ({ name: j.name, status: j.status, detail: j.detail })) : []);
+}
+
+function doneCount(): number {
+  return jobs.filter((j) => j.status === "done" || j.status === "error").length;
+}
+
+function updateOverallStatus(): void {
+  if (!isPro) return; // the free flow's status is set inline by the single-job path
+  const total = jobs.length;
+  if (total === 0) return;
+  const done = doneCount();
+  if (done >= total) {
+    const errs = jobs.filter((j) => j.status === "error").length;
+    const detail = `${total - errs} of ${total} done${errs ? `, ${errs} failed` : ""}` +
+      (activeBackend ? ` — via ${activeBackend}` : "");
+    setStatus(refs, "done", detail);
+  } else {
+    setStatus(refs, "segmenting", `${done} of ${total} done`);
   }
 }
 
 // --- intake wiring ---------------------------------------------------------
 refs.fileInput.addEventListener("change", () => {
-  const f = refs.fileInput.files?.[0];
-  if (f) void handleFile(f);
+  const files = refs.fileInput.files;
+  if (files && files.length) intake([...files]);
+  refs.fileInput.value = ""; // allow re-picking the same file(s)
 });
 
 function wireDropzone(refs: UIRefs): void {
@@ -135,8 +223,8 @@ function wireDropzone(refs: UIRefs): void {
   dz.addEventListener("drop", (e) => {
     e.preventDefault();
     setDragActive(refs, false);
-    const f = e.dataTransfer?.files?.[0];
-    if (f) void handleFile(f);
+    const files = e.dataTransfer?.files;
+    if (files && files.length) intake([...files]);
   });
 }
 wireDropzone(refs);
