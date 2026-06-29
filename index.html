@@ -93,7 +93,9 @@
         flex-wrap: wrap; margin-top: 0.85rem;
       }
       a#unlock-toggle { cursor: pointer; }
-      #unlock-panel { display: inline-flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+      /* :not([hidden]) so the id-specificity display rule doesn't defeat the hidden attribute
+         (toggled by the Unlock Pro link and by setPro on unlock). */
+      #unlock-panel:not([hidden]) { display: inline-flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
       #token-input {
         background: var(--bg); border: 1px solid var(--edge); border-radius: 8px;
         color: var(--ink); padding: 0.4rem 0.6rem; min-width: min(380px, 72vw);
