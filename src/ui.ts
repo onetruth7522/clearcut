@@ -52,15 +52,13 @@ export function getRefs(): UIRefs {
 }
 
 /**
- * Show the quality affordance in one of three states (decided by main.ts):
- *   "toggle" — Pro + WebGPU: the Fast / High-Quality switch
- *   "note"   — Pro, no WebGPU: the "High-Quality needs a WebGPU browser" note
- *   "none"   — free: nothing
+ * Show the quality affordance when Pro (the Fast / High-Quality segmented toggle + the "slower" hint),
+ * hide it for free users. HQ (IS-Net on WASM) is available to every Pro user — no WebGPU required.
  */
-export function setQualityAffordance(refs: UIRefs, mode: "toggle" | "note" | "none"): void {
-  refs.qualityRow.hidden = mode === "none";
-  refs.qualityToggle.hidden = mode !== "toggle";
-  refs.qualityNote.hidden = mode !== "note";
+export function setQualityAffordance(refs: UIRefs, show: boolean): void {
+  refs.qualityRow.hidden = !show;
+  refs.qualityToggle.hidden = !show;
+  refs.qualityNote.hidden = !show; // the "High-Quality is slower" hint, shown with the toggle
 }
 
 /** Reflect the selected quality on the segmented control (aria-checked drives the visual state). */

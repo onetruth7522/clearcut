@@ -35,28 +35,16 @@ const pending = new Map<number, { original: RGBAImage; sourceName: string }>();
 let activeBackend = "";
 let lastResult: RGBAImage | null = null;
 let isPro = false; // Pro entitlement (verified offline); unlocks batch + bulk-ZIP. See license.ts.
-// Quality model (Phase 2b / CF-0010). Default High-Quality when Pro, but only EFFECTIVE with WebGPU
-// (HQ/BiRefNet is WebGPU-only — PHASE-CONTRACT D4). Free or no-WebGPU always runs Fast/U-2-Netp.
+// Quality model (Phase 2b / CF-0010, Amendment 1). Default High-Quality when Pro. HQ (IS-Net) runs
+// on WASM and is available to EVERY Pro user (no WebGPU required) — it's just slower. Free = Fast.
 let quality: QualityKey = "hq";
-let hasWebGPU = false;
 
-const effectiveModel = (): QualityKey => (isPro && hasWebGPU ? quality : "fast");
+const effectiveModel = (): QualityKey => (isPro ? quality : "fast");
 
-async function detectWebGPU(): Promise<boolean> {
-  try {
-    const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-    if (!gpu) return false;
-    return (await gpu.requestAdapter()) != null;
-  } catch {
-    return false;
-  }
-}
-
-// Tri-state quality affordance: toggle (Pro+WebGPU) / note (Pro, no WebGPU) / nothing (free).
+// Quality affordance: the segmented toggle + "slower" hint when Pro; nothing when free.
 function updateQualityAffordance(): void {
-  const mode = !isPro ? "none" : hasWebGPU ? "toggle" : "note";
-  setQualityAffordance(refs, mode);
-  if (mode === "toggle") setQuality(refs, quality);
+  setQualityAffordance(refs, isPro);
+  if (isPro) setQuality(refs, quality);
 }
 
 // Reflect Pro entitlement into UI + state: badge/intake (setPro), default the quality to HQ, refresh
@@ -370,8 +358,8 @@ refs.tokenInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); void activate(); }
 });
 
-// Quality toggle (Pro + WebGPU only): sets the model for the NEXT batch (each batch freezes its
-// model at intake). Event-delegated so one listener covers both segments; a running batch is unaffected.
+// Quality toggle (Pro only): sets the model for the NEXT batch (each batch freezes its model at
+// intake). Event-delegated so one listener covers both segments; a running batch is unaffected.
 refs.qualityToggle.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".q-opt");
   const key = btn?.dataset.quality;
@@ -383,12 +371,6 @@ refs.qualityToggle.addEventListener("click", (e) => {
 // Restore entitlement on load: re-verify the stored token (a hand-set flag never unlocks).
 void verifyStoredEntitlement(loadPro()).then((ok) => {
   if (ok) enableProUI();
-});
-
-// Detect WebGPU once; HQ is WebGPU-only, so this decides toggle vs note vs nothing.
-void detectWebGPU().then((ok) => {
-  hasWebGPU = ok;
-  updateQualityAffordance();
 });
 
 setStatus(refs, "idle");

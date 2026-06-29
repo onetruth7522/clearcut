@@ -1,35 +1,29 @@
 // Worker-side model owner: lazy-load a model per quality key, run inference, return a square uint8
 // mask (high = foreground). Owns ALL preprocessing so the worker stays model-agnostic.
 //
-// Two models, descriptor-driven (see models.ts + PHASE-CONTRACT 2b):
-//   fast (U-2-Netp, 320²)      — manual ImageNet preprocess; transformers.js 4.2.0 CANNOT build its
-//                                AutoProcessor (`Unknown image_processor_type: 'U2NetImageProcessor'`),
-//                                so we squash to 320² and normalize by hand. Output `1959`, saliency 0..1.
-//   hq   (BiRefNet_lite, 1024²) — AutoProcessor works (declares the built-in ViTFeatureExtractor); fed a
-//                                RawImage built from the worker's already-EXIF-oriented ImageData (NOT
-//                                RawImage.fromBlob) so HQ honors EXIF identically to fast + the full-res
-//                                original. Output `output_image`, a single LOGIT plane (sigmoid in extract).
-// Two resident slots are allowed (Map); execution stays serialized by main.ts's inFlight guard
-// (single concurrent ORT execution — ARCHITECTURE §6). HQ is WebGPU-only (no WASM fallback, D4).
-import { AutoModel, AutoProcessor, RawImage, Tensor, env } from "@huggingface/transformers";
-import { MODELS, maskFromOutput, type QualityKey, type ModelDescriptor } from "./models.ts";
-
-// ImageNet normalization (fast manual path only; hq's AutoProcessor normalizes internally).
-const MEAN = [0.485, 0.456, 0.406];
-const STD = [0.229, 0.224, 0.225];
+// Two models, two runtimes (see models.ts + PHASE-CONTRACT 2b Amendment 1):
+//   fast (U-2-Netp, 320²)     — runtime "transformers": @huggingface/transformers AutoModel. Its
+//                               AutoProcessor is broken on 4.2.0, so we preprocess by hand. WebGPU
+//                               when an adapter exists, else WASM. Output "1959" (already 0..1).
+//   hq   (IS-Net, 1024²)      — runtime "ort-raw": a RAW onnxruntime-web session over a bare Apache
+//                               .onnx (transformers.js can't load it — no HF config). WASM only (the
+//                               export's MaxPool ceil_mode is unsupported on ORT-Web WebGPU). The
+//                               176 MB model is fetched with streaming progress. Output "output" 0..1.
+// Preprocessing is unified + descriptor-driven (preprocessNCHW). Two resident slots are allowed (Map);
+// execution stays serialized by main.ts's inFlight guard (single concurrent execution, ARCHITECTURE §6).
+import { AutoModel, Tensor, env } from "@huggingface/transformers";
+import * as ort from "onnxruntime-web";
+import { MODELS, maskFromOutput, preprocessNCHW, type QualityKey, type ModelDescriptor } from "./models.ts";
 
 export type Backend = "webgpu" | "wasm";
 export type ProgressCb = (p: unknown) => void;
 
-type ModelFn = (inputs: Record<string, Tensor>) => Promise<Record<string, OutTensor>>;
 interface OutTensor { data: Float32Array | Uint16Array | number[]; dims: number[]; }
-type ProcessorFn = (img: RawImage) => Promise<{ pixel_values: Tensor }>;
 
 interface Loaded {
   descriptor: ModelDescriptor;
-  model: ModelFn;
-  processor?: ProcessorFn; // hq only
-  inputName: string;
+  // Run normalized NCHW input through the model; return the primary output plane.
+  run: (chw: Float32Array) => Promise<OutTensor>;
   backend: Backend;
 }
 
@@ -38,23 +32,22 @@ export interface SegmentResult {
   size: number;     // mask edge in px (= descriptor.inputSize: 320 fast / 1024 hq)
 }
 
-// One load slot per quality key — both models may be resident at once.
 const slots = new Map<QualityKey, Promise<Loaded>>();
 
 /**
- * Configure transformers.js for a zero-backend static deploy. Must be called once before load.
+ * Configure transformers.js AND raw onnxruntime-web for a zero-backend static deploy.
  * @param ortBase absolute URL of the directory holding our self-hosted ORT wasm (e.g. ".../ort/")
  */
 export function configureEnv(ortBase: string): void {
   const wasm = env.backends.onnx.wasm;
   if (wasm) {
-    // Self-host the ORT wasm/glue (shipped in dist/ort/) instead of the default CDN.
-    wasm.wasmPaths = ortBase;
-    // GitHub Pages can't set COOP/COEP, so SharedArrayBuffer is unavailable -> single-threaded wasm.
-    wasm.numThreads = 1;
+    wasm.wasmPaths = ortBase; // self-host the ORT wasm/glue (dist/ort/) instead of the CDN
+    wasm.numThreads = 1;      // GitHub Pages can't set COOP/COEP -> no SharedArrayBuffer -> single-thread
   }
-  // Model weights come from the HF hub at runtime; we never bundle/serve them ourselves.
-  env.allowLocalModels = false;
+  // The raw ort-raw session uses ort.env directly; point it at the same self-hosted wasm.
+  ort.env.wasm.wasmPaths = ortBase;
+  ort.env.wasm.numThreads = 1;
+  env.allowLocalModels = false; // transformers weights come from the HF hub at runtime
 }
 
 async function detectWebGPU(): Promise<boolean> {
@@ -67,42 +60,84 @@ async function detectWebGPU(): Promise<boolean> {
   }
 }
 
+// Read an output tensor's plane as fp32 numbers regardless of its on-wire dtype (defensive).
+function asFloat32(tensor: OutTensor): Float32Array | number[] {
+  const data = tensor.data;
+  if (data instanceof Float32Array || Array.isArray(data)) return data;
+  const converted = (tensor as unknown as { to(t: string): OutTensor }).to("float32");
+  return converted.data as Float32Array;
+}
+
+// Stream a model file with progress so the 176 MB IS-Net download shows a percentage (raw
+// InferenceSession.create(url) gives no progress events). Emits the transformers.js progress shape.
+async function fetchWithProgress(url: string, onProgress?: ProgressCb): Promise<Uint8Array> {
+  const resp = await fetch(url);
+  if (!resp.ok || !resp.body) throw new Error(`model fetch failed: HTTP ${resp.status}`);
+  const total = Number(resp.headers.get("content-length")) || 0;
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total && onProgress) onProgress({ status: "progress", progress: (received / total) * 100 });
+  }
+  const buf = new Uint8Array(received);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.length; }
+  return buf;
+}
+
+// --- transformers runtime (fast / U-2-Netp) -------------------------------
+async function loadTransformers(d: ModelDescriptor, onProgress?: ProgressCb): Promise<Loaded> {
+  const mk = (device: Backend) =>
+    AutoModel.from_pretrained(d.id!, { dtype: d.dtype, device, progress_callback: onProgress } as never);
+  let backend: Backend = (await detectWebGPU()) ? "webgpu" : "wasm";
+  let model: unknown;
+  try {
+    model = await mk(backend);
+  } catch (e1) {
+    console.warn(`[ClearCut] ${backend} backend failed for ${d.key}, falling back to wasm:`, e1);
+    backend = "wasm";
+    model = await mk("wasm");
+  }
+  const sessions = (model as { sessions?: Record<string, { inputNames?: string[] }> }).sessions ?? {};
+  const session = sessions.model ?? Object.values(sessions)[0];
+  const inputName = session?.inputNames?.[0] ?? "input.1";
+  const m = model as (inputs: Record<string, Tensor>) => Promise<Record<string, OutTensor>>;
+  const S = d.inputSize;
+  const run = async (chw: Float32Array): Promise<OutTensor> => {
+    const out = await m({ [inputName]: new Tensor("float32", chw, [1, 3, S, S]) });
+    return out[d.outputKey!] ?? out[Object.keys(out)[0]];
+  };
+  return { descriptor: d, run, backend };
+}
+
+// --- ort-raw runtime (hq / IS-Net) ----------------------------------------
+async function loadOrtRaw(d: ModelDescriptor, onProgress?: ProgressCb): Promise<Loaded> {
+  const bytes = await fetchWithProgress(d.url!, onProgress);
+  const session = await ort.InferenceSession.create(bytes, { executionProviders: [d.ep!] });
+  const inputName = session.inputNames[0] ?? d.inputName!;
+  const outputName = d.outputName && session.outputNames.includes(d.outputName)
+    ? d.outputName
+    : session.outputNames[0];
+  const S = d.inputSize;
+  const run = async (chw: Float32Array): Promise<OutTensor> => {
+    const out = await session.run({ [inputName]: new ort.Tensor("float32", chw, [1, 3, S, S]) });
+    const t = out[outputName] as unknown as OutTensor;
+    return t;
+  };
+  return { descriptor: d, run, backend: d.ep as Backend };
+}
+
 async function load(key: QualityKey, onProgress?: ProgressCb): Promise<Loaded> {
   let slot = slots.get(key);
   if (!slot) {
     slot = (async () => {
       const d = MODELS[key];
-      const mk = (device: Backend) =>
-        AutoModel.from_pretrained(d.id, { dtype: d.dtype, device, progress_callback: onProgress } as never);
-
-      // Pick the backend. hq is WebGPU-only (D4) — fail loudly, never silently fall to a 1024²-WASM OOM.
-      // fast is "auto": WebGPU only if an adapter actually exists, else WASM (with load-time fallback).
-      let backend: Backend;
-      let model: unknown;
-      if (d.device === "webgpu") {
-        backend = "webgpu";
-        model = await mk("webgpu"); // no fallback for hq
-      } else {
-        backend = (await detectWebGPU()) ? "webgpu" : "wasm";
-        try {
-          model = await mk(backend);
-        } catch (e1) {
-          console.warn(`[ClearCut] ${backend} backend failed for ${key}, falling back to wasm:`, e1);
-          backend = "wasm";
-          model = await mk("wasm");
-        }
-      }
-
-      const processor = d.preprocess === "auto-processor"
-        ? ((await AutoProcessor.from_pretrained(d.id)) as unknown as ProcessorFn)
-        : undefined;
-
-      // Resolve the real ONNX input name rather than hardcoding (fast: "input.1", hq: "input_image").
-      const sessions = (model as { sessions?: Record<string, { inputNames?: string[] }> }).sessions ?? {};
-      const session = sessions.model ?? Object.values(sessions)[0];
-      const fallbackName = d.preprocess === "auto-processor" ? "input_image" : "input.1";
-      const inputName = session?.inputNames?.[0] ?? fallbackName;
-      return { descriptor: d, model: model as ModelFn, processor, inputName, backend };
+      return d.runtime === "ort-raw" ? loadOrtRaw(d, onProgress) : loadTransformers(d, onProgress);
     })().catch((e) => {
       // Don't cache a rejected load — a transient download failure must not brick future attempts.
       slots.delete(key);
@@ -118,77 +153,23 @@ export async function ensureModel(key: QualityKey, onProgress?: ProgressCb): Pro
   return (await load(key, onProgress)).backend;
 }
 
-// Read an output tensor's plane as fp32 numbers regardless of its on-wire dtype. An fp16 model can
-// hand back raw fp16 bits (Uint16Array); reading those as JS numbers would corrupt the sigmoid, so
-// convert through the Tensor's own .to("float32") in that case (A2 watch-item, PHASE-CONTRACT §10).
-function asFloat32(tensor: OutTensor): Float32Array | number[] {
-  const data = tensor.data;
-  if (data instanceof Float32Array || Array.isArray(data)) return data;
-  const converted = (tensor as unknown as { to(t: string): OutTensor }).to("float32");
-  return converted.data as Float32Array;
-}
-
 /**
  * Segment an EXIF-oriented bitmap with the given model. Owns all preprocessing; closes the bitmap.
  * Returns a square uint8 mask (size = the model's input edge). composite.ts upscales it to full res.
  */
 export async function segment(key: QualityKey, bitmap: ImageBitmap): Promise<SegmentResult> {
-  const { model, processor, inputName, descriptor } = await load(key);
+  const { run, descriptor } = await load(key);
   try {
-    return descriptor.preprocess === "manual-squash"
-      ? segmentManual(model, inputName, descriptor, bitmap)
-      : await segmentAuto(model, processor!, inputName, descriptor, bitmap);
+    const S = descriptor.inputSize;
+    const canvas = new OffscreenCanvas(S, S);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable in worker");
+    ctx.drawImage(bitmap, 0, 0, S, S); // squash to the model's input size
+    const rgba = ctx.getImageData(0, 0, S, S).data;
+    const chw = preprocessNCHW(rgba, S, descriptor.rescale, descriptor.mean, descriptor.std);
+    const out = await run(chw);
+    return { data: maskFromOutput(descriptor.output, asFloat32(out)), size: S };
   } finally {
     bitmap.close();
   }
-}
-
-// fast: squash-draw to 320², manual ÷255 + ImageNet normalize, NCHW [1,3,S,S]. Byte-identical to Phase 1.
-function segmentManual(model: ModelFn, inputName: string, d: ModelDescriptor, bitmap: ImageBitmap): Promise<SegmentResult> {
-  const S = d.inputSize;
-  const canvas = new OffscreenCanvas(S, S);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable in worker");
-  ctx.drawImage(bitmap, 0, 0, S, S);
-  const rgba = ctx.getImageData(0, 0, S, S).data;
-
-  const plane = S * S;
-  const chw = new Float32Array(3 * plane);
-  for (let p = 0; p < plane; p++) {
-    const r = rgba[p * 4] / 255;
-    const g = rgba[p * 4 + 1] / 255;
-    const b = rgba[p * 4 + 2] / 255;
-    chw[p] = (r - MEAN[0]) / STD[0];
-    chw[plane + p] = (g - MEAN[1]) / STD[1];
-    chw[2 * plane + p] = (b - MEAN[2]) / STD[2];
-  }
-  const input = new Tensor("float32", chw, [1, 3, S, S]);
-  return model({ [inputName]: input }).then((output) => {
-    const sal = output[d.outputKey!] ?? output[Object.keys(output)[0]];
-    return { data: maskFromOutput(d.output, asFloat32(sal)), size: S };
-  });
-}
-
-// hq: native-size ImageData -> RawImage(.rgb) -> AutoProcessor (resizes to 1024² + ImageNet-normalizes
-// internally) -> model -> single logit plane -> logit-sigmoid extraction. NO in-segment resize: the
-// 1024² mask goes to composite.ts, which upscales to source dims (full-res invariant lives there).
-async function segmentAuto(
-  model: ModelFn, processor: ProcessorFn, inputName: string, d: ModelDescriptor, bitmap: ImageBitmap,
-): Promise<SegmentResult> {
-  const w = bitmap.width;
-  const h = bitmap.height;
-  const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable in worker");
-  ctx.drawImage(bitmap, 0, 0); // native size, no scaling — the processor does the 1024² resize
-  const img = ctx.getImageData(0, 0, w, h);
-
-  const raw = new RawImage(img.data, w, h, 4).rgb(); // drop alpha -> 3 channels for the processor
-  const { pixel_values } = await processor(raw);
-  const output = await model({ [inputName]: pixel_values });
-
-  const out = output["output_image"] ?? output[Object.keys(output)[0]];
-  const dims = out.dims;
-  const size = dims[dims.length - 1]; // square output edge (1024)
-  return { data: maskFromOutput(d.output, asFloat32(out)), size };
 }
