@@ -3,7 +3,8 @@
 // 320x320 mask, which we upscale and composite at full resolution here.
 import { compositeAlpha, type RGBAImage } from "./composite.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
-import { getRefs, setStatus, showError, setDragActive, type UIRefs } from "./ui.ts";
+import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, type UIRefs } from "./ui.ts";
+import { verifyProToken, verifyStoredEntitlement, loadPro, savePro } from "./license.ts";
 
 const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -32,6 +33,7 @@ const pending = new Map<number, { original: RGBAImage; sourceName: string }>();
 let activeBackend = "";
 let lastResult: RGBAImage | null = null;
 let processing = false; // Phase 1 handles one image at a time; ignore drops while one is in flight.
+let isPro = false; // Pro entitlement (verified offline); unlocks batch + bulk-ZIP. See license.ts.
 
 // Guard against megapixel inputs that blow past canvas / typed-array limits (silent blank output).
 const MAX_PIXELS = 25_000_000; // ~25 MP
@@ -147,6 +149,40 @@ refs.downloadBtn.addEventListener("click", async () => {
   } catch (err) {
     showError(refs, `could not encode PNG: ${err instanceof Error ? err.message : String(err)}`);
   }
+});
+
+// --- pro unlock (Phase 2) --------------------------------------------------
+refs.unlockToggle.addEventListener("click", () => {
+  refs.unlockPanel.hidden = !refs.unlockPanel.hidden;
+  if (!refs.unlockPanel.hidden) refs.tokenInput.focus();
+});
+
+async function activate(): Promise<void> {
+  if (isPro) { setUnlockMsg(refs, "Pro is already unlocked on this device.", "ok"); return; }
+  const token = refs.tokenInput.value.trim();
+  if (!token) { setUnlockMsg(refs, "Paste your license token first.", "error"); return; }
+  refs.activateBtn.disabled = true;
+  setUnlockMsg(refs, "Checking…");
+  // Verify fully offline against the embedded public key — no network call (Model B).
+  const ok = await verifyProToken(token);
+  refs.activateBtn.disabled = false;
+  if (ok) {
+    isPro = true;
+    savePro(token);
+    setPro(refs, true);
+    setUnlockMsg(refs, "Pro unlocked — batch processing and bulk-ZIP are enabled.", "ok");
+  } else {
+    setUnlockMsg(refs, "That token isn't valid. Check you pasted the whole thing.", "error");
+  }
+}
+refs.activateBtn.addEventListener("click", () => void activate());
+refs.tokenInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); void activate(); }
+});
+
+// Restore entitlement on load: re-verify the stored token (a hand-set flag never unlocks).
+void verifyStoredEntitlement(loadPro()).then((ok) => {
+  if (ok) { isPro = true; setPro(refs, true); }
 });
 
 setStatus(refs, "idle");

@@ -78,11 +78,39 @@
         font-size: 0.85rem;
       }
       footer a { color: var(--accent); }
+      #pro-badge {
+        font-size: 0.55em;
+        vertical-align: middle;
+        background: var(--accent);
+        color: #08111e;
+        padding: 0.15em 0.5em;
+        border-radius: 6px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+      }
+      .pro-row {
+        display: flex; gap: 0.5rem; align-items: center; justify-content: center;
+        flex-wrap: wrap; margin-top: 0.85rem;
+      }
+      a#unlock-toggle { cursor: pointer; }
+      #unlock-panel { display: inline-flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+      #token-input {
+        background: var(--bg); border: 1px solid var(--edge); border-radius: 8px;
+        color: var(--ink); padding: 0.4rem 0.6rem; min-width: min(380px, 72vw);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem;
+      }
+      #activate {
+        background: var(--accent); color: #08111e; border: 0; border-radius: 8px;
+        padding: 0.42rem 0.9rem; font-weight: 600; cursor: pointer;
+      }
+      #unlock-msg { font-size: 0.8rem; min-height: 1em; }
+      #unlock-msg[data-state="error"] { color: #ff7b72; }
+      #unlock-msg[data-state="ok"] { color: #56d364; }
     </style>
   </head>
   <body>
     <header>
-      <h1>ClearCut</h1>
+      <h1>ClearCut <span id="pro-badge" hidden>PRO</span></h1>
       <p>Remove an image background in full resolution — no watermark, no sign-up.</p>
       <p class="privacy">Your photos never leave your device.</p>
     </header>
@@ -111,6 +139,22 @@
         model (Apache-2.0) via
         <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">🤗 Transformers.js</a>.
         See <a href="./THIRD-PARTY-NOTICES.md" target="_blank" rel="noopener">third-party notices</a>.
+      </p>
+      <p class="pro-row">
+        <a id="unlock-toggle" role="button" tabindex="0">Unlock Pro</a>
+        <span id="unlock-panel" hidden>
+          <input
+            id="token-input"
+            type="text"
+            placeholder="Paste your Pro license token"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            aria-label="Pro license token"
+          />
+          <button id="activate" type="button">Activate</button>
+          <span id="unlock-msg" aria-live="polite"></span>
+        </span>
       </p>
     </footer>
 
