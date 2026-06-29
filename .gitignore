@@ -48,6 +48,10 @@ Auditor/
 Technical Director/
 Implementation Engineer/
 
+# Machine-local working notes / research scratch (Surveyor & Research findings, model
+# staging, probe scripts). Never product — keep it out of the public repo.
+scratchpad/
+
 # Stray substrate-MCP artifact (wrong methodology family — flagged for removal). Ignored
 # so it never pollutes the product repo while its disposition is pending.
 substrate/
