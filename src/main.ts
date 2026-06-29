@@ -68,6 +68,17 @@ function enableProUI(): void {
   updateQualityAffordance();
 }
 
+// Graceful revert when an HQ job fails (D4): HQ is WebGPU-only with no WASM fallback, so a failed
+// HQ load/inference would otherwise have every subsequent drop re-attempt the same failing path.
+// Drop back to Fast and refresh the toggle so the user sees the change (the error itself is already
+// surfaced by the caller). Only meaningful while still on HQ.
+function revertHqToFast(): void {
+  if (quality === "hq") {
+    quality = "fast";
+    updateQualityAffordance();
+  }
+}
+
 // Batch queue. Free = a 1-item queue; Pro = N items processed STRICTLY sequentially through the
 // single ORT worker session — never two concurrent segmentations (ARCHITECTURE.md §6 invariant).
 type JobStatus = "queued" | "processing" | "done" | "error";
@@ -76,6 +87,7 @@ interface Job {
   file: File;
   name: string;        // source filename
   status: JobStatus;
+  model: QualityKey;   // model frozen at intake — a whole batch runs one model (no mid-batch mix)
   detail?: string;     // error message, when status === "error"
   outName?: string;    // "<stem>-clearcut.png"
   blob?: Blob;         // encoded transparent PNG, retained for bulk-ZIP
@@ -104,6 +116,7 @@ worker.onmessage = (e: MessageEvent<WorkerMsg>) => {
     const job = msg.id !== undefined ? jobs.find((j) => j.id === msg.id) : undefined;
     if (msg.id !== undefined) pending.delete(msg.id); // don't leak the held full-res RGBA
     if (job) { job.status = "error"; job.detail = msg.message; }
+    if (job?.model === "hq") revertHqToFast(); // failed HQ path -> drop to Fast (D4)
     if (isPro) { renderQueue(); updateOverallStatus(); } else { showError(refs, msg.message); }
     pump(); // keep the batch moving past a failed image
   }
@@ -116,6 +129,7 @@ worker.onerror = (e) => {
   const msg = e.message || "worker crashed";
   const stuck = jobs.find((j) => j.status === "processing");
   if (stuck) { stuck.status = "error"; stuck.detail = msg; }
+  if (stuck?.model === "hq") revertHqToFast(); // an HQ crash -> drop to Fast (D4)
   if (isPro) { renderQueue(); updateOverallStatus(); } else { showError(refs, msg); }
   pump();
 };
@@ -187,7 +201,9 @@ function intake(files: File[]): void {
     return;
   }
   const batch = isPro ? accepted : accepted.slice(0, 1);
-  jobs = batch.map((file) => ({ id: ++reqId, file, name: file.name, status: "queued" }));
+  // Freeze the model for the whole batch at intake — toggling mid-batch must not mix models.
+  const batchModel = effectiveModel();
+  jobs = batch.map((file) => ({ id: ++reqId, file, name: file.name, status: "queued", model: batchModel }));
   refs.downloadBtn.disabled = true;
   refs.preview.hidden = true;
   setStatus(refs, "loading-model");
@@ -213,9 +229,9 @@ async function dispatch(job: Job): Promise<void> {
     const original = await decodeFullRes(job.file);
     pending.set(job.id, { original, sourceName: job.name });
     if (isPro) updateOverallStatus(); else setStatus(refs, "segmenting");
-    // Hand the worker the original blob (cheap to clone) + the effective quality model; the worker
+    // Hand the worker the original blob (cheap to clone) + the job's frozen quality model; the worker
     // EXIF-decodes and the model owner does its own per-model downscale/preprocess.
-    worker.postMessage({ type: "segment", id: job.id, blob: job.file, model: effectiveModel() });
+    worker.postMessage({ type: "segment", id: job.id, blob: job.file, model: job.model });
   } catch (err) {
     // Decode failed (e.g. too large / corrupt) — fail just this job and keep the batch moving.
     job.status = "error";
@@ -354,8 +370,8 @@ refs.tokenInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); void activate(); }
 });
 
-// Quality toggle (Pro + WebGPU only): switch the model for the NEXT job. Event-delegated so a
-// single listener covers both segments; an in-flight job already on the worker is unaffected.
+// Quality toggle (Pro + WebGPU only): sets the model for the NEXT batch (each batch freezes its
+// model at intake). Event-delegated so one listener covers both segments; a running batch is unaffected.
 refs.qualityToggle.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".q-opt");
   const key = btn?.dataset.quality;
