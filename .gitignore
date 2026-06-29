@@ -6,6 +6,10 @@ dist/
 # Regenerable ONNX Runtime wasm — recreated by `npm run copy-ort` (scripts/copy-ort.mjs).
 public/ort/
 
+# Pro-license signing key (Phase 2, Model B). The Ed25519 PRIVATE key never ships and is
+# never committed; only its public half is embedded in src/license.ts. See PHASE-CONTRACT §2.3.
+.keys/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Scaffolding — machine-local on ROC (outside C:\Claude-Access, so NOT Syncthing-
 # carried either). Git carries ONLY the product; none of the methodology/document
