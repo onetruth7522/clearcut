@@ -162,15 +162,14 @@
       </p>
       <p class="pro-row">
         <!-- Get Pro -> live Stripe Payment Link (ClearCut Pro, $5 one-time; fulfillment is manual,
-             per sale via scripts/sign-token.mjs). Tip jar is still a placeholder — no Ko-fi page yet (CF-0015). -->
+             per sale via scripts/sign-token.mjs). Tip jar -> live Ko-fi pay-what-you-want support
+             page (CF-0015 resolved 2026-06-29). NB: the tip jar is SUPPORT only — it grants no Pro;
+             Pro is sold solely via the Stripe link above. -->
         <a id="buy-pro" href="https://buy.stripe.com/14A4gBakJgDug9a0iV1RC00" target="_blank" rel="noopener">Get Pro</a>
         <span aria-hidden="true">·</span>
         <a id="unlock-toggle" role="button" tabindex="0">Unlock Pro</a>
-        <!-- Tip jar hidden until a real Ko-fi page exists (CF-0015). Restore this separator + link,
-             with the real https://ko-fi.com/<handle>, when the page is live:
         <span aria-hidden="true">·</span>
-        <a id="tip-jar" href="https://ko-fi.com/REPLACE_WITH_HANDLE" target="_blank" rel="noopener">☕ Tip jar</a>
-        -->
+        <a id="tip-jar" href="https://ko-fi.com/s/aead907327" target="_blank" rel="noopener">☕ Tip jar</a>
         <span id="unlock-panel" hidden>
           <input
             id="token-input"
