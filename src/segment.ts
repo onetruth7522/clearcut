@@ -12,6 +12,9 @@
 // Preprocessing is unified + descriptor-driven (preprocessNCHW). Two resident slots are allowed (Map);
 // execution stays serialized by main.ts's inFlight guard (single concurrent execution, ARCHITECTURE §6).
 import { AutoModel, Tensor, env } from "@huggingface/transformers";
+// LOAD-BEARING PIN: onnxruntime-web is pinned in package.json to the EXACT version transformers.js
+// 4.2.0 bundles (1.26.0-dev.20260416-...), so Vite dedupes this raw import to transformers' own ORT
+// instance (one ort.env, one wasm runtime). A transformers bump can desync the two — re-pin together.
 import * as ort from "onnxruntime-web";
 import { MODELS, maskFromOutput, preprocessNCHW, type QualityKey, type ModelDescriptor } from "./models.ts";
 

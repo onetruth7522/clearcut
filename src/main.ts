@@ -1,6 +1,6 @@
 // UI wiring: intake (pick/drop) -> worker (segment) -> composite -> preview -> download.
-// The original full-resolution pixels stay on THIS thread; the worker only ever returns a
-// 320x320 mask, which we upscale and composite at full resolution here.
+// The original full-resolution pixels stay on THIS thread; the worker returns a square mask
+// (320² Fast / 1024² HQ), which we upscale and composite at full resolution here.
 import { compositeAlpha, type RGBAImage } from "./composite.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
 import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, setQuality, setQualityAffordance, type UIRefs } from "./ui.ts";
@@ -56,8 +56,8 @@ function enableProUI(): void {
   updateQualityAffordance();
 }
 
-// Graceful revert when an HQ job fails (D4): HQ is WebGPU-only with no WASM fallback, so a failed
-// HQ load/inference would otherwise have every subsequent drop re-attempt the same failing path.
+// Graceful revert when an HQ job fails: a failed HQ load/inference (download failure, OOM, or an
+// inference error) would otherwise have every subsequent drop re-attempt the same failing path.
 // Drop back to Fast and refresh the toggle so the user sees the change (the error itself is already
 // surfaced by the caller). Only meaningful while still on HQ.
 function revertHqToFast(): void {
