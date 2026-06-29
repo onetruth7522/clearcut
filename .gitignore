@@ -6,6 +6,48 @@ dist/
 # Regenerable ONNX Runtime wasm — recreated by `npm run copy-ort` (scripts/copy-ort.mjs).
 public/ort/
 
-# Build/process notes & deferral ledger — local project scaffolding, not part of the shipped repo.
+# ─────────────────────────────────────────────────────────────────────────────
+# Scaffolding — machine-local on ROC (outside C:\Claude-Access, so NOT Syncthing-
+# carried either). Git carries ONLY the product; none of the methodology/document
+# layer is committed. See CLAUDE.md §"Git + the carrier (machine-local scaffolding)".
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Methodology layer
+CLAUDE.md
+AGENTS.md
+.claude/
+.creation-workflow
+Opus.bat
+Sonnet.bat
+Codex.bat
+Homebase/
+Friction-Log/
+
+# Phase-close in-progress marker — transient; dropped during a close, removed at the end.
+# Gitignored so an interrupted close is flagged locally, never committed.
+.phase-close-in-progress
+
+# Document layer + role findings folders
+STATE.md
+HISTORY.md
+THREAD.md
+PROJECT.md
+ARCHITECTURE.md
+PHASE-CONTRACT.md
+CAPABILITY-STATE.md
 MEASUREMENTS.md
 CARRY-FORWARD.md
+Surveyor/
+Research/
+Debugger/
+Auditor/
+Technical Director/
+Implementation Engineer/
+
+# Stray substrate-MCP artifact (wrong methodology family — flagged for removal). Ignored
+# so it never pollutes the product repo while its disposition is pending.
+substrate/
+
+# OS / editor / Syncthing litter — disposable; never commit.
+*.sync-conflict-*
+~syncthing~*
