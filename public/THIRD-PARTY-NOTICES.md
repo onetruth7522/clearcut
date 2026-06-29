@@ -42,3 +42,15 @@ limitations under the License.
 
 - **Project:** [`onnxruntime-web`](https://github.com/microsoft/onnxruntime) (bundled with Transformers.js).
 - **License:** MIT License. Copyright (c) Microsoft Corporation.
+
+## @noble/ed25519
+
+- **Project:** [`@noble/ed25519`](https://github.com/paulmillr/noble-ed25519) (Ed25519 signatures;
+  used to verify Pro license tokens entirely in your browser — no license server).
+- **License:** MIT License. Copyright (c) Paul Miller.
+
+## client-zip
+
+- **Project:** [`client-zip`](https://github.com/Touffy/client-zip) (in-browser ZIP streaming for
+  the Pro bulk-export download).
+- **License:** MIT License. Copyright (c) David Junger.

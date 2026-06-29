@@ -17,6 +17,7 @@ export interface UIRefs {
   unlockMsg: HTMLElement;
   proBadge: HTMLElement;
   batchList: HTMLElement;
+  downloadAllBtn: HTMLButtonElement;
 }
 
 export function getRefs(): UIRefs {
@@ -39,6 +40,7 @@ export function getRefs(): UIRefs {
     unlockMsg: $("unlock-msg"),
     proBadge: $("pro-badge"),
     batchList: $("batch"),
+    downloadAllBtn: $<HTMLButtonElement>("download-all"),
   };
 }
 
@@ -83,6 +85,8 @@ export function setPro(refs: UIRefs, active: boolean): void {
   if (active) refs.unlockPanel.hidden = true;
   // Pro unlocks multi-image batch intake; free stays single-file.
   refs.fileInput.multiple = active;
+  // Reveal the bulk-ZIP button for Pro (it stays disabled until ≥1 result exists).
+  refs.downloadAllBtn.hidden = !active;
 }
 
 /** Inline feedback under the token box. `state` "ok" | "error" colors it; "" clears. */

@@ -5,6 +5,7 @@ import { compositeAlpha, type RGBAImage } from "./composite.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
 import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, type UIRefs } from "./ui.ts";
 import { verifyProToken, verifyStoredEntitlement, loadPro, savePro } from "./license.ts";
+import { downloadZip } from "client-zip";
 
 const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp"]);
 
@@ -102,6 +103,7 @@ async function onResult(msg: WorkerResult): Promise<void> {
     if (!isPro) showError(refs, job.detail);
   }
   if (isPro) { renderQueue(); updateOverallStatus(); }
+  syncDownloadAll();
 }
 
 const stem = (filename: string): string => filename.replace(/\.[^.]+$/, "");
@@ -147,6 +149,7 @@ function intake(files: File[]): void {
   refs.preview.hidden = true;
   setStatus(refs, "loading-model");
   renderQueue();
+  syncDownloadAll(); // fresh batch — nothing to zip yet
   pump();
 }
 
@@ -205,6 +208,18 @@ function updateOverallStatus(): void {
   }
 }
 
+// Finished images with an encoded PNG, in queue order — the bulk-ZIP payload.
+function readyResults(): { name: string; blob: Blob }[] {
+  return jobs.flatMap((j) =>
+    j.status === "done" && j.blob && j.outName ? [{ name: j.outName, blob: j.blob }] : [],
+  );
+}
+
+function syncDownloadAll(): void {
+  if (!isPro) return;
+  refs.downloadAllBtn.disabled = readyResults().length === 0;
+}
+
 // --- intake wiring ---------------------------------------------------------
 refs.fileInput.addEventListener("change", () => {
   const files = refs.fileInput.files;
@@ -236,6 +251,23 @@ refs.downloadBtn.addEventListener("click", async () => {
     downloadBlob(blob, refs.downloadBtn.dataset.name || "clearcut.png");
   } catch (err) {
     showError(refs, `could not encode PNG: ${err instanceof Error ? err.message : String(err)}`);
+  }
+});
+
+// Bulk-ZIP (Pro): stream all finished PNGs into one store-only ZIP, entirely in-browser.
+refs.downloadAllBtn.addEventListener("click", async () => {
+  const ready = readyResults();
+  if (ready.length === 0) return;
+  refs.downloadAllBtn.disabled = true;
+  try {
+    // client-zip stores (never deflates) — ideal for already-compressed PNGs — and streams,
+    // so a large batch zips without buffering every file in memory at once.
+    const blob = await downloadZip(ready.map((r) => ({ name: r.name, input: r.blob }))).blob();
+    downloadBlob(blob, "clearcut-batch.zip");
+  } catch (err) {
+    showError(refs, `could not build ZIP: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    syncDownloadAll();
   }
 });
 
