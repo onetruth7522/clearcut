@@ -3,8 +3,9 @@
 // 320x320 mask, which we upscale and composite at full resolution here.
 import { compositeAlpha, type RGBAImage } from "./composite.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
-import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, type UIRefs } from "./ui.ts";
+import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, setQuality, setQualityAffordance, type UIRefs } from "./ui.ts";
 import { verifyProToken, verifyStoredEntitlement, loadPro, savePro } from "./license.ts";
+import type { QualityKey } from "./models.ts";
 import { downloadZip } from "client-zip";
 
 const ACCEPTED = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -34,6 +35,38 @@ const pending = new Map<number, { original: RGBAImage; sourceName: string }>();
 let activeBackend = "";
 let lastResult: RGBAImage | null = null;
 let isPro = false; // Pro entitlement (verified offline); unlocks batch + bulk-ZIP. See license.ts.
+// Quality model (Phase 2b / CF-0010). Default High-Quality when Pro, but only EFFECTIVE with WebGPU
+// (HQ/BiRefNet is WebGPU-only — PHASE-CONTRACT D4). Free or no-WebGPU always runs Fast/U-2-Netp.
+let quality: QualityKey = "hq";
+let hasWebGPU = false;
+
+const effectiveModel = (): QualityKey => (isPro && hasWebGPU ? quality : "fast");
+
+async function detectWebGPU(): Promise<boolean> {
+  try {
+    const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    if (!gpu) return false;
+    return (await gpu.requestAdapter()) != null;
+  } catch {
+    return false;
+  }
+}
+
+// Tri-state quality affordance: toggle (Pro+WebGPU) / note (Pro, no WebGPU) / nothing (free).
+function updateQualityAffordance(): void {
+  const mode = !isPro ? "none" : hasWebGPU ? "toggle" : "note";
+  setQualityAffordance(refs, mode);
+  if (mode === "toggle") setQuality(refs, quality);
+}
+
+// Reflect Pro entitlement into UI + state: badge/intake (setPro), default the quality to HQ, refresh
+// the affordance. Called from both unlock paths (live activate + stored-token restore).
+function enableProUI(): void {
+  isPro = true;
+  setPro(refs, true);
+  quality = "hq";
+  updateQualityAffordance();
+}
 
 // Batch queue. Free = a 1-item queue; Pro = N items processed STRICTLY sequentially through the
 // single ORT worker session — never two concurrent segmentations (ARCHITECTURE.md §6 invariant).
@@ -180,8 +213,9 @@ async function dispatch(job: Job): Promise<void> {
     const original = await decodeFullRes(job.file);
     pending.set(job.id, { original, sourceName: job.name });
     if (isPro) updateOverallStatus(); else setStatus(refs, "segmenting");
-    // Hand the worker the original blob (cheap to clone); it does its own 320x320 downscale.
-    worker.postMessage({ type: "segment", id: job.id, blob: job.file });
+    // Hand the worker the original blob (cheap to clone) + the effective quality model; the worker
+    // EXIF-decodes and the model owner does its own per-model downscale/preprocess.
+    worker.postMessage({ type: "segment", id: job.id, blob: job.file, model: effectiveModel() });
   } catch (err) {
     // Decode failed (e.g. too large / corrupt) — fail just this job and keep the batch moving.
     job.status = "error";
@@ -308,10 +342,9 @@ async function activate(): Promise<void> {
   const ok = await verifyProToken(token);
   refs.activateBtn.disabled = false;
   if (ok) {
-    isPro = true;
+    enableProUI();
     savePro(token);
-    setPro(refs, true);
-    setUnlockMsg(refs, "Pro unlocked — batch processing and bulk-ZIP are enabled.", "ok");
+    setUnlockMsg(refs, "Pro unlocked — batch, bulk-ZIP, and the High-Quality model are enabled.", "ok");
   } else {
     setUnlockMsg(refs, "That token isn't valid. Check you pasted the whole thing.", "error");
   }
@@ -321,9 +354,25 @@ refs.tokenInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); void activate(); }
 });
 
+// Quality toggle (Pro + WebGPU only): switch the model for the NEXT job. Event-delegated so a
+// single listener covers both segments; an in-flight job already on the worker is unaffected.
+refs.qualityToggle.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".q-opt");
+  const key = btn?.dataset.quality;
+  if (key !== "fast" && key !== "hq") return;
+  quality = key;
+  setQuality(refs, quality);
+});
+
 // Restore entitlement on load: re-verify the stored token (a hand-set flag never unlocks).
 void verifyStoredEntitlement(loadPro()).then((ok) => {
-  if (ok) { isPro = true; setPro(refs, true); }
+  if (ok) enableProUI();
+});
+
+// Detect WebGPU once; HQ is WebGPU-only, so this decides toggle vs note vs nothing.
+void detectWebGPU().then((ok) => {
+  hasWebGPU = ok;
+  updateQualityAffordance();
 });
 
 setStatus(refs, "idle");

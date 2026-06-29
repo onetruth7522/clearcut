@@ -18,6 +18,10 @@ export interface UIRefs {
   proBadge: HTMLElement;
   batchList: HTMLElement;
   downloadAllBtn: HTMLButtonElement;
+  // Pro-only quality toggle (Phase 2b)
+  qualityRow: HTMLElement;
+  qualityToggle: HTMLElement;
+  qualityNote: HTMLElement;
 }
 
 export function getRefs(): UIRefs {
@@ -41,7 +45,29 @@ export function getRefs(): UIRefs {
     proBadge: $("pro-badge"),
     batchList: $("batch"),
     downloadAllBtn: $<HTMLButtonElement>("download-all"),
+    qualityRow: $("quality-row"),
+    qualityToggle: $("quality-toggle"),
+    qualityNote: $("quality-note"),
   };
+}
+
+/**
+ * Show the quality affordance in one of three states (decided by main.ts):
+ *   "toggle" — Pro + WebGPU: the Fast / High-Quality switch
+ *   "note"   — Pro, no WebGPU: the "High-Quality needs a WebGPU browser" note
+ *   "none"   — free: nothing
+ */
+export function setQualityAffordance(refs: UIRefs, mode: "toggle" | "note" | "none"): void {
+  refs.qualityRow.hidden = mode === "none";
+  refs.qualityToggle.hidden = mode !== "toggle";
+  refs.qualityNote.hidden = mode !== "note";
+}
+
+/** Reflect the selected quality on the segmented control (aria-checked drives the visual state). */
+export function setQuality(refs: UIRefs, key: "fast" | "hq"): void {
+  for (const btn of refs.qualityToggle.querySelectorAll<HTMLButtonElement>(".q-opt")) {
+    btn.setAttribute("aria-checked", String(btn.dataset.quality === key));
+  }
 }
 
 export type BatchStatus = "queued" | "processing" | "done" | "error";

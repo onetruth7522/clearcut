@@ -1,20 +1,22 @@
-// Inference worker. Owns the model so the ~4.4MB load + segmentation never block the UI thread.
+// Inference worker. Owns the model(s) so loads + segmentation never block the UI thread.
 //
 // Protocol (main -> worker):
-//   { type: "init", ortBase }                 configure env once
-//   { type: "segment", id, blob }              segment one image (original full-res blob)
+//   { type: "init", ortBase }                       configure env once
+//   { type: "segment", id, blob, model }            segment one image with the chosen quality model
 // Protocol (worker -> main):
-//   { type: "backend", backend }              active backend resolved (webgpu | wasm)
-//   { type: "progress", progress }            model download/load progress
-//   { type: "result", id, mask, maskW, maskH }  transferable 320x320 uint8 mask
+//   { type: "backend", backend }                    active backend resolved (webgpu | wasm)
+//   { type: "progress", progress }                  model download/load progress
+//   { type: "result", id, mask, maskW, maskH }      transferable square uint8 mask (320² or 1024²)
 //   { type: "error", id?, message }
-import { configureEnv, ensureModel, segment, MODEL_INPUT_SIZE } from "./segment.ts";
+import { configureEnv, ensureModel, segment } from "./segment.ts";
+import type { QualityKey } from "./models.ts";
 
 type InMsg =
   | { type: "init"; ortBase: string }
-  | { type: "segment"; id: number; blob: Blob };
+  | { type: "segment"; id: number; blob: Blob; model: QualityKey };
 
-let backendReported = false;
+// Report the active backend once per resolved model (fast/hq can resolve to different backends).
+const backendReported = new Set<QualityKey>();
 
 self.onmessage = async (e: MessageEvent<InMsg>) => {
   const msg = e.data;
@@ -24,27 +26,20 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
       return;
     }
     if (msg.type === "segment") {
-      // Lazy-load the model on first real request; surface progress + the chosen backend.
-      const backend = await ensureModel((p) => self.postMessage({ type: "progress", progress: p }));
-      if (!backendReported) {
-        backendReported = true;
+      // Lazy-load the chosen model on first request; surface progress + the chosen backend.
+      const backend = await ensureModel(msg.model, (p) => self.postMessage({ type: "progress", progress: p }));
+      if (!backendReported.has(msg.model)) {
+        backendReported.add(msg.model);
         self.postMessage({ type: "backend", backend });
       }
 
-      // Squash-resize the original to the model's 320x320 input (canonical U2Net preprocessing).
-      // Honor EXIF orientation so the mask aligns with the main thread's identically-decoded original.
+      // EXIF-decode once here so the mask aligns with the main thread's identically-decoded original.
+      // segment() owns the model-specific preprocessing and closes the bitmap.
       const bitmap = await createImageBitmap(msg.blob, { imageOrientation: "from-image" });
-      const S = MODEL_INPUT_SIZE;
-      const canvas = new OffscreenCanvas(S, S);
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable in worker");
-      ctx.drawImage(bitmap, 0, 0, S, S);
-      bitmap.close();
-      const rgba = ctx.getImageData(0, 0, S, S).data;
+      const { data: mask, size } = await segment(msg.model, bitmap);
 
-      const mask = await segment(rgba);
       self.postMessage(
-        { type: "result", id: msg.id, mask, maskW: S, maskH: S },
+        { type: "result", id: msg.id, mask, maskW: size, maskH: size },
         { transfer: [mask.buffer] },
       );
     }
