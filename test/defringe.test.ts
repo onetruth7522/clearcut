@@ -60,9 +60,30 @@ test("a contaminated fringe pixel adjacent to a clean solid region is pulled tow
   assert.deepEqual([...out.data.slice(0, 4)], [255, 0, 0, 255]);
 });
 
-test("a fringe pixel with NO solid pixel in range keeps its original RGB (safe fallback)", () => {
-  // A lone fringe pixel: no solid neighbor anywhere -> RGB carried through unchanged.
+test("a fringe pixel with NO solid pixel anywhere keeps its original RGB (safe fallback)", () => {
+  // A lone fringe pixel: no solid source -> nothing to propagate -> RGB carried through unchanged.
   const img = image(1, 1, () => [50, 60, 70, 128]);
   const out = defringe(img);
   assert.deepEqual([...out.data], [50, 60, 70, 128]);
+});
+
+test("color propagates the FULL width of a soft matte band, not just a fixed radius (Amendment 1)", () => {
+  // 1x24 row: solid red | 20 contaminated grey fringe pixels (alpha 100) | 3 transparent.
+  // The fringe pixel 20px from the solid source — far beyond any bounded window — must still be
+  // decontaminated to red. This is the property the windowed approach lacked (CF-0011 cold-drive).
+  const img = image(24, 1, (x) => {
+    if (x === 0) return [255, 0, 0, 255];      // solid foreground source
+    if (x <= 20) return [128, 128, 128, 100];  // contaminated soft-matte band (light grey)
+    return [128, 128, 128, 0];                 // transparent tail
+  });
+  const out = defringe(img);
+  for (let x = 1; x <= 20; x++) {
+    const i = x * 4;
+    assert.equal(out.data[i], 255, `x=${x} R propagated to solid red`);
+    assert.equal(out.data[i + 1], 0, `x=${x} G`);
+    assert.equal(out.data[i + 2], 0, `x=${x} B`);
+    assert.equal(out.data[i + 3], 100, `x=${x} alpha unchanged`);
+  }
+  // Transparent tail RGB is left untouched (never shown); alpha stays 0.
+  assert.equal(out.data[21 * 4 + 3], 0, "transparent stays transparent");
 });
