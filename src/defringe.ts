@@ -16,17 +16,22 @@ import type { RGBAImage } from "./composite.ts";
 
 // A pixel is a clean color SOURCE when its alpha is at/above this — interior foreground. Pixels with
 // alpha in (0, SOLID_T) are contaminated edge pixels whose RGB we decontaminate; alpha 0 is fully
-// transparent (never shown), so it is left untouched.
+// transparent (never shown), so it is left untouched. (One threshold, not a separate fringe ceiling:
+// every partial-alpha pixel is fringe, every near/fully-opaque pixel is a source.)
 const SOLID_T = 250;
-// Search radius (px) around a fringe pixel for solid sources. Bounded so cost stays O(W·H·R²).
-const R = 4;
 
 /**
  * Decontaminate edge colors in a composited RGBA image. Returns a NEW image with the SAME dimensions
  * and a BIT-IDENTICAL alpha channel; only the RGB of fractional-alpha edge pixels is changed, pulled
  * toward nearby fully-opaque foreground color. Solid and fully-transparent pixels keep their RGB.
+ *
+ * `radius` is the search window (px) for solid sources. It MUST be ≳ the fringe-band width, which in
+ * the composited full-res image is ~the mask→full upscale factor (a 320² mask on a 4000px image
+ * spreads the 0→250 alpha ramp over ~12 px). A fixed radius starves the deepest fringe pixels of any
+ * source on the Fast/320² path, so the caller scales it to the upscale factor (Debugger Phase 3). The
+ * default 4 suits near-1:1 mask→full ratios and the unit tests.
  */
-export function defringe(img: RGBAImage): RGBAImage {
+export function defringe(img: RGBAImage, radius = 4): RGBAImage {
   const W = img.width;
   const H = img.height;
   const src = img.data;
@@ -41,10 +46,10 @@ export function defringe(img: RGBAImage): RGBAImage {
 
       // Fringe pixel: gather distance-weighted clean color from solid neighbors in the INPUT buffer.
       let wr = 0, wg = 0, wb = 0, wsum = 0;
-      const y0 = y - R < 0 ? 0 : y - R;
-      const y1 = y + R >= H ? H - 1 : y + R;
-      const x0 = x - R < 0 ? 0 : x - R;
-      const x1 = x + R >= W ? W - 1 : x + R;
+      const y0 = y - radius < 0 ? 0 : y - radius;
+      const y1 = y + radius >= H ? H - 1 : y + radius;
+      const x0 = x - radius < 0 ? 0 : x - radius;
+      const x1 = x + radius >= W ? W - 1 : x + radius;
       for (let ny = y0; ny <= y1; ny++) {
         for (let nx = x0; nx <= x1; nx++) {
           const j = (ny * W + nx) * 4;

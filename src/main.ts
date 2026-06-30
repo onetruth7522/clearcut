@@ -134,7 +134,12 @@ async function onResult(msg: WorkerResult): Promise<void> {
   if (!job || !meta) return;
   try {
     const composited = compositeAlpha(meta.original, { data: msg.mask, width: msg.maskW, height: msg.maskH });
-    const cleaned = defringe(composited); // CF-0011: decontaminate edge color (halo) before render/encode
+    // CF-0011: decontaminate edge color (halo) before render/encode. The fringe band scales with the
+    // mask→full upscale factor (Fast/320² on a multi-MP image = a wide band), so size the search radius
+    // to it — a fixed radius starves the deepest fringe pixels of a clean source on the Fast path.
+    const upscale = Math.max(composited.width / msg.maskW, composited.height / msg.maskH);
+    const radius = Math.min(16, Math.max(4, Math.round(upscale) + 1));
+    const cleaned = defringe(composited, radius);
     lastResult = cleaned;
     renderPreview(refs.canvas, cleaned);
     refs.preview.hidden = false;
