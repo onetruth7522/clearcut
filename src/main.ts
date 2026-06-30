@@ -2,6 +2,7 @@
 // The original full-resolution pixels stay on THIS thread; the worker returns a square mask
 // (320² Fast / 1024² HQ), which we upscale and composite at full resolution here.
 import { compositeAlpha, type RGBAImage } from "./composite.ts";
+import { defringe } from "./defringe.ts";
 import { renderPreview, toPngBlob, downloadBlob } from "./render.ts";
 import { getRefs, setStatus, showError, setDragActive, setPro, setUnlockMsg, renderBatch, setQuality, setQualityAffordance, type UIRefs } from "./ui.ts";
 import { verifyProToken, verifyStoredEntitlement, loadPro, savePro } from "./license.ts";
@@ -133,13 +134,14 @@ async function onResult(msg: WorkerResult): Promise<void> {
   if (!job || !meta) return;
   try {
     const composited = compositeAlpha(meta.original, { data: msg.mask, width: msg.maskW, height: msg.maskH });
-    lastResult = composited;
-    renderPreview(refs.canvas, composited);
+    const cleaned = defringe(composited); // CF-0011: decontaminate edge color (halo) before render/encode
+    lastResult = cleaned;
+    renderPreview(refs.canvas, cleaned);
     refs.preview.hidden = false;
     job.outName = stem(job.name) + "-clearcut.png";
     refs.downloadBtn.dataset.name = job.outName;
     refs.downloadBtn.disabled = false;
-    job.blob = await toPngBlob(composited); // retain for bulk-ZIP (hold the PNG, not the RGBA)
+    job.blob = await toPngBlob(cleaned); // retain for bulk-ZIP (hold the PNG, not the RGBA)
     job.status = "done";
     if (!isPro) setStatus(refs, "done", activeBackend ? `via ${activeBackend}` : "");
   } catch (err) {
